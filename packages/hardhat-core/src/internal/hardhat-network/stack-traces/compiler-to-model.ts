@@ -243,16 +243,16 @@ function processFunctionDefinitionAstNode(
 
   const paramTypes = matchingFunctionAbi?.inputs?.map((input) => input.type);
 
-  const contractFunc = {
-    name: functionDefinitionNode.name,
-    type: functionType,
-    location: functionLocation,
+  const contractFunc = new ContractFunction(
+    functionDefinitionNode.name,
+    functionType,
+    functionLocation,
     contract,
     visibility,
-    isPayable: functionDefinitionNode.stateMutability === "payable",
+    functionDefinitionNode.stateMutability === "payable",
     selector,
-    paramTypes,
-  };
+    paramTypes
+  );
 
   if (contract !== undefined) {
     contract.addLocalFunction(contractFunc);
@@ -272,12 +272,12 @@ function processModifierDefinitionAstNode(
     fileIdToSourceFile
   )!;
 
-  const contractFunc: ContractFunction = {
-    name: modifierDefinitionNode.name,
-    type: ContractFunctionType.MODIFIER,
-    location: functionLocation,
-    contract,
-  };
+  const contractFunc = new ContractFunction(
+    modifierDefinitionNode.name,
+    ContractFunctionType.MODIFIER,
+    functionLocation,
+    contract
+  );
 
   contract.addLocalFunction(contractFunc);
   file.addFunction(contractFunc);
@@ -354,18 +354,16 @@ function processVariableDeclarationAstNode(
 
   const paramTypes = getterAbi?.inputs?.map((input) => input.type);
 
-  const cf: ContractFunction = {
-    name: variableDeclarationNode.name,
-    type: ContractFunctionType.GETTER,
-    location: functionLocation,
+  const cf = new ContractFunction(
+    variableDeclarationNode.name,
+    ContractFunctionType.GETTER,
+    functionLocation,
     contract,
     visibility,
-    isPayable: false, // Getters aren't payable
-    selector: getPublicVariableSelectorFromDeclarationAstNode(
-      variableDeclarationNode
-    ),
-    paramTypes,
-  };
+    false, // Getters aren't payable
+    getPublicVariableSelectorFromDeclarationAstNode(variableDeclarationNode),
+    paramTypes
+  );
 
   contract.addLocalFunction(cf);
   file.addFunction(cf);
