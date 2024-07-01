@@ -23,7 +23,6 @@ export type DecodedEvmMessageTrace =
   | DecodedCreateMessageTrace
   | DecodedCallMessageTrace;
 
-
 export interface DecodedCreateMessageTrace extends CreateMessageTrace {
   bytecode: Bytecode;
 }
