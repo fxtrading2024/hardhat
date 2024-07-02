@@ -1,6 +1,16 @@
 import debug from "debug";
 
 import {
+  correctSelectors,
+  astSrcToSourceLocation,
+  processModifierDefinitionAstNode,
+  processVariableDeclarationAstNode,
+  astVisibilityToVisibility,
+  isEnumType,
+  isContractType,
+  toCanonicalAbiType,
+} from "@nomicfoundation/edr";
+import {
   CompilerInput,
   CompilerOutput,
   CompilerOutputBytecode,
@@ -19,7 +29,6 @@ import {
   ContractType,
   CustomError,
   SourceFile,
-  SourceLocation,
 } from "./model";
 import { decodeInstructions } from "./source-maps";
 
@@ -71,7 +80,7 @@ function createSourcesModelFromAst(
 ) {
   const contractIdToLinearizedBaseContractIds = new Map<number, number[]>();
 
-  // Create a `sourceName => contract => abi` mapping
+  // Create a `sourceName => contractName => abi` mapping
   const sourceNameToContractToAbi = new Map<string, Map<string, ContractAbi>>();
   for (const [sourceName, contracts] of Object.entries(
     compilerOutput.contracts
@@ -90,12 +99,19 @@ function createSourcesModelFromAst(
       compilerInput.sources[sourceName].content
     );
 
+    // Should return a
+    // - list of source files
+    // - mapping of file id to the source file
+    // - and the contract name to abi mapping?
+
+    // Are we sure this is in a topological order?
+    // Otherwise it'd be more correct to first process all the sources
+    // and only then process the contracts using the fileIdToSourceFile map
     fileIdToSourceFile.set(source.id, file);
 
     for (const node of source.ast.nodes) {
       if (node.nodeType === "ContractDefinition") {
         const contractType = contractKindToContractType(node.contractKind);
-
         if (contractType === undefined) {
           continue;
         }
@@ -261,113 +277,6 @@ function processFunctionDefinitionAstNode(
   file.addFunction(contractFunc);
 }
 
-function processModifierDefinitionAstNode(
-  modifierDefinitionNode: any,
-  fileIdToSourceFile: Map<number, SourceFile>,
-  contract: Contract,
-  file: SourceFile
-) {
-  const functionLocation = astSrcToSourceLocation(
-    modifierDefinitionNode.src,
-    fileIdToSourceFile
-  )!;
-
-  const contractFunc = new ContractFunction(
-    modifierDefinitionNode.name,
-    ContractFunctionType.MODIFIER,
-    functionLocation,
-    contract
-  );
-
-  contract.addLocalFunction(contractFunc);
-  file.addFunction(contractFunc);
-}
-
-function canonicalAbiTypeForElementaryOrUserDefinedTypes(keyType: any): any {
-  if (isElementaryType(keyType)) {
-    return toCanonicalAbiType(keyType.name);
-  }
-
-  if (isEnumType(keyType)) {
-    return "uint256";
-  }
-
-  if (isContractType(keyType)) {
-    return "address";
-  }
-
-  return undefined;
-}
-
-function getPublicVariableSelectorFromDeclarationAstNode(
-  variableDeclaration: any
-) {
-  if (variableDeclaration.functionSelector !== undefined) {
-    return Buffer.from(variableDeclaration.functionSelector, "hex");
-  }
-
-  const paramTypes: string[] = [];
-
-  // VariableDeclaration nodes for function parameters or state variables will always
-  // have their typeName fields defined.
-  let nextType = variableDeclaration.typeName;
-  while (true) {
-    if (nextType.nodeType === "Mapping") {
-      const canonicalType = canonicalAbiTypeForElementaryOrUserDefinedTypes(
-        nextType.keyType
-      );
-      paramTypes.push(canonicalType);
-
-      nextType = nextType.valueType;
-    } else {
-      if (nextType.nodeType === "ArrayTypeName") {
-        paramTypes.push("uint256");
-      }
-
-      break;
-    }
-  }
-
-  return abi.methodID(variableDeclaration.name, paramTypes);
-}
-
-function processVariableDeclarationAstNode(
-  variableDeclarationNode: any,
-  fileIdToSourceFile: Map<number, SourceFile>,
-  contract: Contract,
-  file: SourceFile,
-  getterAbi?: ContractAbiEntry
-) {
-  const visibility = astVisibilityToVisibility(
-    variableDeclarationNode.visibility
-  );
-
-  // Variables can't be external
-  if (visibility !== ContractFunctionVisibility.PUBLIC) {
-    return;
-  }
-
-  const functionLocation = astSrcToSourceLocation(
-    variableDeclarationNode.src,
-    fileIdToSourceFile
-  )!;
-
-  const paramTypes = getterAbi?.inputs?.map((input) => input.type);
-
-  const cf = new ContractFunction(
-    variableDeclarationNode.name,
-    ContractFunctionType.GETTER,
-    functionLocation,
-    contract,
-    visibility,
-    false, // Getters aren't payable
-    getPublicVariableSelectorFromDeclarationAstNode(variableDeclarationNode),
-    paramTypes
-  );
-
-  contract.addLocalFunction(cf);
-  file.addFunction(cf);
-}
 
 function applyContractsInheritance(
   contractIdToContract: Map<number, Contract>,
@@ -484,20 +393,6 @@ function decodeEvmBytecode(
   );
 }
 
-function astSrcToSourceLocation(
-  src: string,
-  fileIdToSourceFile: Map<number, SourceFile>
-): SourceLocation | undefined {
-  const [offset, length, fileId] = src.split(":").map((p) => +p);
-  const file = fileIdToSourceFile.get(fileId);
-
-  if (file === undefined) {
-    return undefined;
-  }
-
-  return new SourceLocation(file, offset, length);
-}
-
 function contractKindToContractType(
   contractKind?: string
 ): ContractType | undefined {
@@ -510,24 +405,6 @@ function contractKindToContractType(
   }
 
   return undefined;
-}
-
-function astVisibilityToVisibility(
-  visibility: string
-): ContractFunctionVisibility {
-  if (visibility === "private") {
-    return ContractFunctionVisibility.PRIVATE;
-  }
-
-  if (visibility === "internal") {
-    return ContractFunctionVisibility.INTERNAL;
-  }
-
-  if (visibility === "public") {
-    return ContractFunctionVisibility.PUBLIC;
-  }
-
-  return ContractFunctionVisibility.EXTERNAL;
 }
 
 function functionDefinitionKindToFunctionType(
@@ -597,101 +474,4 @@ function astFunctionDefinitionToSelector(functionDefinition: any): Buffer {
   }
 
   return abi.methodID(functionDefinition.name, paramTypes);
-}
-
-function isContractType(param: any): boolean {
-  return (
-    (param.typeName?.nodeType === "UserDefinedTypeName" ||
-      param?.nodeType === "UserDefinedTypeName") &&
-    param.typeDescriptions?.typeString !== undefined &&
-    param.typeDescriptions.typeString.startsWith("contract ")
-  );
-}
-
-function isEnumType(param: any): boolean {
-  return (
-    (param.typeName?.nodeType === "UserDefinedTypeName" ||
-      param?.nodeType === "UserDefinedTypeName") &&
-    param.typeDescriptions?.typeString !== undefined &&
-    param.typeDescriptions.typeString.startsWith("enum ")
-  );
-}
-
-function isElementaryType(param: any) {
-  return (
-    param.type === "ElementaryTypeName" ||
-    param.nodeType === "ElementaryTypeName"
-  );
-}
-
-function toCanonicalAbiType(type: string): string {
-  if (type.startsWith("int[")) {
-    return `int256${type.slice(3)}`;
-  }
-
-  if (type === "int") {
-    return "int256";
-  }
-
-  if (type.startsWith("uint[")) {
-    return `uint256${type.slice(4)}`;
-  }
-
-  if (type === "uint") {
-    return "uint256";
-  }
-
-  if (type.startsWith("fixed[")) {
-    return `fixed128x128${type.slice(5)}`;
-  }
-
-  if (type === "fixed") {
-    return "fixed128x128";
-  }
-
-  if (type.startsWith("ufixed[")) {
-    return `ufixed128x128${type.slice(6)}`;
-  }
-
-  if (type === "ufixed") {
-    return "ufixed128x128";
-  }
-
-  return type;
-}
-
-function correctSelectors(
-  bytecodes: Bytecode[],
-  compilerOutput: CompilerOutput
-) {
-  for (const bytecode of bytecodes) {
-    if (bytecode.isDeployment) {
-      continue;
-    }
-
-    const contract = bytecode.contract;
-    const methodIdentifiers =
-      compilerOutput.contracts[contract.location.file.sourceName][contract.name]
-        .evm.methodIdentifiers;
-
-    for (const [signature, hexSelector] of Object.entries(methodIdentifiers)) {
-      const functionName = signature.slice(0, signature.indexOf("("));
-      const selector = Buffer.from(hexSelector, "hex");
-
-      const contractFunction = contract.getFunctionFromSelector(selector);
-
-      if (contractFunction !== undefined) {
-        continue;
-      }
-
-      const fixedSelector = contract.correctSelector(functionName, selector);
-
-      if (!fixedSelector) {
-        // eslint-disable-next-line @nomicfoundation/hardhat-internal-rules/only-hardhat-error
-        throw new Error(
-          `Failed to compute the selector one or more implementations of ${contract.name}#${functionName}. Hardhat Network can automatically fix this problem if you don't use function overloading.`
-        );
-      }
-    }
-  }
 }
