@@ -1,5 +1,11 @@
 # hardhat
 
+## 2.22.7
+
+### Patch Changes
+
+- f6ddc92: Add `debug` logs to Hardhat Network initialization process.
+
 ## 2.22.6
 
 ### Patch Changes
