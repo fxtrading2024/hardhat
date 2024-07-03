@@ -1,15 +1,10 @@
 import {
   getLibraryAddressPositions,
   linkHexStringBytecode,
-  normalizeCompilerOutputBytecode,
 } from "@nomicfoundation/edr";
 import { Opcode } from "./opcodes";
 
-export {
-  getLibraryAddressPositions,
-  linkHexStringBytecode,
-  normalizeCompilerOutputBytecode,
-};
+export { getLibraryAddressPositions, linkHexStringBytecode };
 
 export function zeroOutAddresses(
   code: Uint8Array,
